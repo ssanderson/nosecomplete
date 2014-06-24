@@ -70,21 +70,53 @@ def _get_prefixed(strings, prefix):
             yield string.replace(prefix, '', 1)
 
 
-def _get_py_or_dirs(directory, prefix):
+def _get_py_or_dirs(directory, prefix, as_module=False):
     for entry in os.listdir(directory or '.'):
         path = os.path.join(directory, entry)
         if entry.startswith(prefix):
             leftover = entry.replace(prefix, '', 1)
             if os.path.isdir(path):
-                yield leftover + '/'
+                if as_module:
+                    yield leftover + '.'
+                else:
+                    yield leftover + '/'
             elif leftover.endswith('.py'):
-                yield leftover + ':'
+                if as_module:
+                    # Strip off .py if this is a module
+                    yield leftover[:-3] + ':'
+                else:
+                    yield leftover + ':'
 
+def _is_path_or_filelike(thing):
+    """
+    Return True if `thing` looks like a file, a path, or the start of a
+    file/path.
+    """
+    return (os.path.exists(thing) or
+            os.path.isdir(thing) or
+            os.path.isdir(os.path.split(thing)[0]))
+
+def _modname_to_filepath(thing):
+    """
+    Convert foo.bar.buzz -> foo/bar/buzz/
+    """
+    return os.path.join(*thing.split('.'))
+
+def _is_modulelike(thing):
+    """
+    Return True if `thing` looks like python module name or the start of a
+    python modulename.
+    """
+    return _is_path_or_filelike(_modname_to_filepath(thing.strip('.')))
 
 def _complete(test_finder, thing):
     if ':' in thing:
         # complete a test
         module, test_part = thing.split(':')
+        if not os.path.exists(module):
+            # Try to convert from module-style syntax to file-style syntax.
+            module = _modname_to_filepath(module) + '.py'
+
         tests = list(test_finder.get_module_tests(module))
         if '.' in test_part:
             # complete a method
@@ -95,18 +127,37 @@ def _complete(test_finder, thing):
             # indicate a method should be completed
             return ['.']
         return _get_prefixed(strings=funcs + classes, prefix=test_part)
-    if os.path.isdir(thing):
-        # complete directory contents
-        if thing != '.' and not thing.endswith('/'):
-            return ['/']
-        return _get_py_or_dirs(thing, '')
-    if os.path.exists(thing):
-        # add a colon to indicate search for specific class/func
-        return [':']
-    # path not exists, complete a partial path
-    directory, file_part = os.path.split(thing)
-    return _get_py_or_dirs(directory, file_part)
 
+    if _is_path_or_filelike(thing):
+        if os.path.isdir(thing):
+            # complete directory contents
+            if thing != '.' and not thing.endswith('/'):
+                return ['/']
+            return _get_py_or_dirs(thing, '')
+        elif os.path.exists(thing):
+            # add a colon to indicate search for specific class/func
+            return [':']
+        else:
+            # path not exists, complete a partial path
+            directory, file_part = os.path.split(thing)
+            return _get_py_or_dirs(directory, file_part)
+
+    if _is_modulelike(thing):
+
+        as_filepath = _modname_to_filepath(thing)
+        if os.path.isdir(as_filepath):
+            # complete directory contents
+            if not thing.endswith('.'):
+                return '.'
+            return _get_py_or_dirs(as_filepath, '', as_module=True)
+
+        elif os.path.exists(as_filepath + '.py'):
+            # add a colon to indicate search for specific class/func
+            return [':']
+        else:
+            # path not exists, complete a partial path
+            directory, file_part = os.path.split(as_filepath)
+            return _get_py_or_dirs(directory, file_part, as_module=True)
 
 def complete(test_finder, thing):
     for option in set(_complete(test_finder, thing)):
